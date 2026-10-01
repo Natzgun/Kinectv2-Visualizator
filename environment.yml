@@ -1,0 +1,15 @@
+name: kinectv2-dev
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - numpy>=1.26,<2
+  - cython>=3,<4
+  - pip
+  - setuptools
+  - wheel
+  - pip:
+      - PyQt6>=6.6,<7
+      - numpy>=1.26,<2
+      - mediapipe>=0.10,<0.11
+      - opencv-contrib-python>=4.8,<5
