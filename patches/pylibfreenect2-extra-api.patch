@@ -1,0 +1,383 @@
+diff --git a/pylibfreenect2/__init__.py b/pylibfreenect2/__init__.py
+--- a/pylibfreenect2/__init__.py
++++ b/pylibfreenect2/__init__.py
+@@ -105,4 +105,47 @@ class LoggerLevel(IntEnum):
+     Info = 3
+     Debug = 4
+ 
++
++class FrameFormat(IntEnum):
++    Invalid = 0
++    Raw = 1
++    Float = 2
++    BGRX = 4
++    RGBX = 5
++    Gray = 6
++
++
++ColorSettingCommand = IntEnum('ColorSettingCommand', dict({
++    'SET_EXPOSURE_MODE': 0,
++    'SET_INTEGRATION_TIME': 1,
++    'GET_INTEGRATION_TIME': 2,
++    'SET_WHITE_BALANCE_MODE': 10,
++    'SET_RED_CHANNEL_GAIN': 11,
++    'SET_GREEN_CHANNEL_GAIN': 12,
++    'SET_BLUE_CHANNEL_GAIN': 13,
++    'GET_RED_CHANNEL_GAIN': 14,
++    'GET_GREEN_CHANNEL_GAIN': 15,
++    'GET_BLUE_CHANNEL_GAIN': 16,
++    'SET_EXPOSURE_TIME_MS': 17,
++    'GET_EXPOSURE_TIME_MS': 18,
++    'SET_DIGITAL_GAIN': 19,
++    'GET_DIGITAL_GAIN': 20,
++    'SET_ANALOG_GAIN': 21,
++    'GET_ANALOG_GAIN': 22,
++    'SET_EXPOSURE_COMPENSATION': 23,
++    'GET_EXPOSURE_COMPENSATION': 24,
++    'SET_ACS': 25,
++    'GET_ACS': 26,
++    'SET_EXPOSURE_METERING_MODE': 27,
++    'SET_EXPOSURE_METERING_ZONES': 28,
++    'SET_MAX_ANALOG_GAIN_CAP': 77,
++    'SET_MAX_DIGITAL_GAIN_CAP': 78,
++    'SET_FLICKER_FREE_FREQUENCY': 79,
++    'GET_EXPOSURE_MODE': 80,
++    'GET_WHITE_BALANCE_MODE': 81,
++    'SET_FRAME_RATE': 82,
++    'GET_FRAME_RATE': 83,
++}, **{'SET_EXPOSURE_METERING_ZONE_{}_WEIGHT'.format(i): 29 + i
++     for i in range(48)}))
++
+ from .libfreenect2 import *
+diff --git a/pylibfreenect2/libfreenect2.pyx b/pylibfreenect2/libfreenect2.pyx
+--- a/pylibfreenect2/libfreenect2.pyx
++++ b/pylibfreenect2/libfreenect2.pyx
+@@ -159,9 +159,10 @@ cimport cython
+ from libcpp cimport bool
+ from libcpp.string cimport string
+ from libcpp.map cimport map
++from libcpp.vector cimport vector
+ 
+ from libcpp.cast cimport reinterpret_cast
+-from libc.stdint cimport uint8_t
++from libc.stdint cimport uint8_t, uint32_t
+ 
+ # Workaround for use of pointer type in reinterpret_cast
+ # https://groups.google.com/forum/#!msg/cython-users/FgEf7Vrx4AM/dm7WY_bMCAAJ
+@@ -308,6 +309,16 @@ cdef class Frame:
+         """Same as ``libfreenect2::Frame::gamma``"""
+         return self.ptr.gamma
+ 
++    @property
++    def status(self):
++        """Zero means the frame is valid; nonzero denotes an error."""
++        return self.ptr.status
++
++    @property
++    def format(self):
++        """Native Frame::Format integer (Raw, Float, BGRX, RGBX or Gray)."""
++        return self.ptr.format
++
+     cdef __uint8_data(self):
+         cdef np.npy_intp shape[3]
+         shape[0] = <np.npy_intp> self.ptr.height
+@@ -508,6 +519,8 @@ cdef class FrameMap:
+         else:
+             raise KeyError("")
+ 
++        if self.internal_frame_map.count(frame_type) == 0:
++            raise KeyError(key)
+         cdef libfreenect2.Frame* frame_ptr = self.internal_frame_map[frame_type]
+         cdef Frame frame = Frame(frame_type=intkey)
+         frame.ptr = frame_ptr
+@@ -1261,6 +1274,12 @@ cdef class Registration:
+         self.ptr.getPointXYZ(undistorted.ptr, r, c, x, y, z)
+         return (x, y, z)
+ 
++    def applyPoint(self, int dx, int dy, float depth_mm):
++        """Map one distorted depth pixel to normalized color coordinates."""
++        cdef float cx = 0, cy = 0
++        self.ptr.apply(dx, dy, depth_mm, cx, cy)
++        return (cx, cy)
++
+ 
+ cdef class Logger:
+     """Python interface for libfreenect2::Logger
+@@ -1454,6 +1473,7 @@ cdef class Freenect2Device:
+     """
+ 
+     cdef _Freenect2Device* ptr
++    cdef object owner
+ 
+     def getSerialNumber(self):
+         """Same as ``libfreenect2::Freenect2Device::getSerialNumber()``"""
+@@ -1520,6 +1540,14 @@ cdef class Freenect2Device:
+         pyparams.params = params
+         return pyparams
+ 
++    def setColorCameraParams(self, ColorCameraParams params):
++        """Replace the in-memory factory calibration before streaming."""
++        self.ptr.setColorCameraParams(params.params)
++
++    def setIrCameraParams(self, IrCameraParams params):
++        """Replace depth calibration before streaming with calibrated values."""
++        self.ptr.setIrCameraParams(params.params)
++
+     def setDepthConfiguration(self, float minimum, float maximum,
+                               bool bilateral=True, bool edge_aware=True):
+         if minimum < 0 or maximum <= minimum:
+@@ -1562,6 +1590,31 @@ cdef class Freenect2Device:
+         led.Reserved = 0
+         self.ptr.setLedStatus(led)
+ 
++    def setColorSetting(self, int command, value):
++        """Native RGB command; use the IDs from libfreenect2/color_settings.h."""
++        if command < 0 or command > 83 or 3 <= command <= 9:
++            raise ValueError("Unknown RGB setting command")
++        if isinstance(value, float):
++            self.ptr.setColorSetting(<libfreenect2.ColorSettingCommandType>command,
++                                     <float>value)
++        else:
++            if not isinstance(value, int) or not 0 <= value <= 0xffffffff:
++                raise ValueError("Integer RGB setting value must be uint32")
++            self.ptr.setColorSetting(<libfreenect2.ColorSettingCommandType>command,
++                                     <uint32_t>value)
++
++    def getColorSetting(self, int command):
++        """Return the raw uint32 RGB setting value."""
++        if command < 0 or command > 83 or 3 <= command <= 9:
++            raise ValueError("Unknown RGB setting command")
++        return self.ptr.getColorSetting(<libfreenect2.ColorSettingCommandType>command)
++
++    def getColorSettingFloat(self, int command):
++        """Return an RGB setting value decoded as float32."""
++        if command < 0 or command > 83 or 3 <= command <= 9:
++            raise ValueError("Unknown RGB setting command")
++        return self.ptr.getColorSettingFloat(<libfreenect2.ColorSettingCommandType>command)
++
+     def setColorFrameListener(self, FrameListener listener):
+         """Same as
+         ``libfreenect2::Freenect2Device::setColorFrameListener(FrameListener*)``
+@@ -1575,19 +1631,23 @@ cdef class Freenect2Device:
+ 
+     def start(self):
+         """Same as ``libfreenect2::Freenect2Device::start()``"""
+-        self.ptr.start()
++        if not self.ptr.start():
++            raise RuntimeError("Unable to start Kinect streams")
+ 
+     def startStreams(self, rgb, depth):
+         """Same as ``libfreenect2::Freenect2Device::startStreams(bool, bool)``"""
+-        self.ptr.startStreams(rgb, depth)
++        if not rgb and not depth:
++            raise ValueError("At least one stream must be enabled")
++        if not self.ptr.startStreams(rgb, depth):
++            raise RuntimeError("Unable to start selected Kinect streams")
+ 
+     def stop(self):
+         """Same as ``libfreenect2::Freenect2Device::stop()``"""
+-        self.ptr.stop()
++        return self.ptr.stop()
+ 
+     def close(self):
+         """Same as ``libfreenect2::Freenect2Device::close()``"""
+-        self.ptr.close()
++        return self.ptr.close()
+ 
+ 
+ cdef class Freenect2:
+@@ -1637,6 +1694,8 @@ cdef class Freenect2:
+         if isinstance(name, int):
+             return self.__openDevice__intidx(name, pipeline)
+-        elif isinstance(name, str) or isinstance(name, bytes):
++        elif isinstance(name, str):
++            return self.__openDevice__stridx(name.encode(), pipeline)
++        elif isinstance(name, bytes):
+             return self.__openDevice__stridx(name, pipeline)
+         else:
+             raise ValueError("device name must be of str, bytes or integer type")
+@@ -1670,3 +1732,41 @@ cdef class Freenect2:
+         cdef Freenect2Device device = Freenect2Device()
+         device.ptr = dev_ptr
+         return device
++
++
++cdef class Freenect2Replay:
++    """Replay libfreenect2 raw packet recordings (not app .npz snapshots).
++
++    Native replay currently processes .depth packets only; it does not decode
++    .jpg files or support startStreams(). Supply the matching camera calibration
++    and raw packet tables before relying on replayed depth values.
++    """
++    cdef libfreenect2.Freenect2Replay* ptr
++
++    def __cinit__(self):
++        self.ptr = new libfreenect2.Freenect2Replay()
++
++    def __dealloc__(self):
++        if self.ptr is not NULL:
++            del self.ptr
++
++    def openDevice(self, filenames, PacketPipeline pipeline=None):
++        filenames = [str(path) for path in filenames]
++        if not filenames:
++            raise ValueError("Replay requires raw frame filenames")
++        if any(not path.endswith(".depth") for path in filenames):
++            raise ValueError("Native replay only processes raw .depth packet files")
++        cdef vector[string] paths = [path.encode() for path in filenames]
++        cdef _Freenect2Device* dev_ptr
++        if pipeline is None:
++            dev_ptr = self.ptr.openDevice(paths)
++        else:
++            dev_ptr = self.ptr.openDevice(paths, pipeline.pipeline_ptr_alias)
++        if dev_ptr == NULL:
++            raise RuntimeError("Unable to open replay device")
++        if pipeline is not None:
++            pipeline.owned_by_device = True
++        cdef Freenect2Device device = Freenect2Device()
++        device.ptr = dev_ptr
++        device.owner = self
++        return device
+diff --git a/pylibfreenect2/libfreenect2/libfreenect2.pxd b/pylibfreenect2/libfreenect2/libfreenect2.pxd
+--- a/pylibfreenect2/libfreenect2/libfreenect2.pxd
++++ b/pylibfreenect2/libfreenect2/libfreenect2.pxd
+@@ -9,5 +9,6 @@ from libc.stdint cimport uint16_t, uint32_t
+ from libcpp.string cimport string
+ from libcpp.map cimport map
++from libcpp.vector cimport vector
+ 
+ 
+ cdef extern from "libfreenect2/frame_listener.hpp" namespace "libfreenect2":
+@@ -19,6 +20,14 @@ cdef extern from "libfreenect2/frame_listener.hpp" namespace "libfreenect2":
+         Ir "libfreenect2::Frame::Type::Ir"
+         Depth "libfreenect2::Frame::Type::Depth"
+ 
++    cdef enum LibFreenect2FrameFormat "libfreenect2::Frame::Format":
++        Invalid "libfreenect2::Frame::Format::Invalid"
++        Raw "libfreenect2::Frame::Format::Raw"
++        Float "libfreenect2::Frame::Format::Float"
++        BGRX "libfreenect2::Frame::Format::BGRX"
++        RGBX "libfreenect2::Frame::Format::RGBX"
++        Gray "libfreenect2::Frame::Format::Gray"
++
+     cdef cppclass Frame:
+         uint32_t timestamp
+         uint32_t sequence
+@@ -29,6 +38,8 @@ cdef extern from "libfreenect2/frame_listener.hpp" namespace "libfreenect2":
+         float exposure
+         float gain
+         float gamma
++        uint32_t status
++        LibFreenect2FrameFormat format
+ 
+         Frame(size_t width, size_t height, size_t bytes_per_pixel, unsigned char*) except +
+ 
+@@ -48,6 +59,10 @@ cdef extern from "libfreenect2/led_settings.h" namespace "libfreenect2":
+         uint16_t LedId, Mode, StartLevel, StopLevel
+         uint32_t IntervalInMs, Reserved
+ 
++cdef extern from "libfreenect2/color_settings.h" namespace "libfreenect2":
++    cdef enum ColorSettingCommandType:
++        COLOR_SETTING_SET_EXPOSURE_MODE
++
+ cdef extern from "libfreenect2/libfreenect2.hpp" namespace "libfreenect2":
+     cdef cppclass Freenect2Device:
+         unsigned int VendorId
+@@ -94,20 +109,23 @@ cdef extern from "libfreenect2/libfreenect2.hpp" namespace "libfreenect2":
+         ColorCameraParams getColorCameraParams()
+         IrCameraParams getIrCameraParams()
++        void setColorCameraParams(const ColorCameraParams &)
++        void setIrCameraParams(const IrCameraParams &)
+         void setConfiguration(const Config &)
+         void setColorAutoExposure(float)
+         void setColorSemiAutoExposure(float)
+         void setColorManualExposure(float, float)
+         void setLedStatus(LedSettings)
++        void setColorSetting(ColorSettingCommandType, uint32_t)
++        void setColorSetting(ColorSettingCommandType, float)
++        uint32_t getColorSetting(ColorSettingCommandType)
++        float getColorSettingFloat(ColorSettingCommandType)
+ 
+-        # void setColorCameraParams(ColorCameraParams &)
+-        # void setIrCameraParams(const Freenect2Device::IrCameraParams &)
+-
+         void setColorFrameListener(FrameListener*)
+         void setIrAndDepthFrameListener(FrameListener*)
+ 
+-        void start()
++        bool start()
+         bool startStreams(bool, bool)
+-        void stop()
+-        void close()
++        bool stop()
++        bool close()
+ 
+ cdef extern from "libfreenect2/registration.h" namespace "libfreenect2":
+@@ -115,4 +136,6 @@ cdef extern from "libfreenect2/registration.h" namespace "libfreenect2":
+         Registration(Freenect2Device.IrCameraParams, Freenect2Device.ColorCameraParams) except +
+ 
++        void apply(int, int, float, float&, float&) const
++
+         # undistort/register a whole image
+         void apply(const Frame*, const Frame*, Frame*, Frame*, const bool, Frame*, int*) const
+@@ -165,6 +188,11 @@ cdef extern from "libfreenect2/libfreenect2.hpp" namespace "libfreenect2":
+         Freenect2Device *openDefaultDevice()
+         Freenect2Device *openDefaultDevice(const PacketPipeline *)
+ 
++    cdef cppclass Freenect2Replay:
++        Freenect2Replay() except +
++        Freenect2Device *openDevice(const vector[string]&)
++        Freenect2Device *openDevice(const vector[string]&, const PacketPipeline *)
++
+ cdef extern from "libfreenect2/logger.h" namespace "libfreenect2":
+     # ugly but works
+     cdef enum LoggerLevel "libfreenect2::Logger::Level":
+diff --git a/tests/test_extended_api.py b/tests/test_extended_api.py
+new file mode 100644
+--- /dev/null
++++ b/tests/test_extended_api.py
+@@ -0,0 +1,44 @@
++"""Boundary checks for the local libfreenect2 binding extensions."""
++
++import unittest
++
++from pylibfreenect2 import ColorSettingCommand, FrameFormat, FrameMap, Freenect2, Freenect2Device, Freenect2Replay
++
++
++class ExtendedBindingTests(unittest.TestCase):
++    def test_missing_frame_does_not_insert_null_native_pointer(self):
++        frames = FrameMap()
++        with self.assertRaises(KeyError):
++            frames["color"]
++        with self.assertRaises(KeyError):
++            frames["depth"]
++
++    def test_empty_replay_is_rejected(self):
++        with self.assertRaises(ValueError):
++            Freenect2Replay().openDevice([])
++        with self.assertRaises(ValueError):
++            Freenect2Replay().openDevice(["snapshot.npz"])
++
++    def test_color_commands_validate_before_native_call(self):
++        self.assertEqual(FrameFormat.BGRX, 4)
++        self.assertEqual(ColorSettingCommand.GET_FRAME_RATE, 83)
++        self.assertEqual(ColorSettingCommand.SET_EXPOSURE_METERING_ZONE_47_WEIGHT, 76)
++        device = Freenect2Device()
++        with self.assertRaises(ValueError):
++            device.setColorSetting(9, 0)
++        with self.assertRaises(ValueError):
++            device.setColorSetting(11, -1)
++        with self.assertRaises(ValueError):
++            device.getColorSetting(84)
++
++    def test_at_least_one_stream_is_required(self):
++        with self.assertRaises(ValueError):
++            Freenect2Device().startStreams(False, False)
++
++    def test_unicode_serial_is_encoded_for_native_open(self):
++        with self.assertRaises(RuntimeError):
++            Freenect2().openDevice("serial-not-enumerated")
++
++
++if __name__ == "__main__":
++    unittest.main()

@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.npz
+
+# Local source checkouts and native build output.
+libfreenect2/
+pylibfreenect2/
+
+# Local editor and environment state.
+.vscode/
+.idea/
+.env

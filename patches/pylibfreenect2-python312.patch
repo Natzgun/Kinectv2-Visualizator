@@ -1,0 +1,142 @@
+diff --git a/pylibfreenect2/__init__.py b/pylibfreenect2/__init__.py
+index 826d7e4..dabc809 100644
+--- a/pylibfreenect2/__init__.py
++++ b/pylibfreenect2/__init__.py
+@@ -11,9 +11,9 @@ The package is compatible with python 2.7, 3.4 and 3.5.
+ 
+ from __future__ import division, print_function, absolute_import
+ 
+-import pkg_resources
++from importlib.metadata import version
+ 
+-__version__ = pkg_resources.get_distribution('pylibfreenect2').version
++__version__ = version('pylibfreenect2')
+ 
+ from enum import IntEnum
+ 
+diff --git a/pylibfreenect2/libfreenect2.pyx b/pylibfreenect2/libfreenect2.pyx
+index b770943..6ead819 100644
+--- a/pylibfreenect2/libfreenect2.pyx
++++ b/pylibfreenect2/libfreenect2.pyx
+@@ -1479,6 +1479,47 @@ cdef class Freenect2Device:
+         pyparams.params = params
+         return pyparams
+ 
++    def setDepthConfiguration(self, float minimum, float maximum,
++                              bool bilateral=True, bool edge_aware=True):
++        if minimum < 0 or maximum <= minimum:
++            raise ValueError("Depth range must have 0 <= minimum < maximum")
++        cdef _Freenect2Device.Config config = _Freenect2Device.Config()
++        config.MinDepth = minimum
++        config.MaxDepth = maximum
++        config.EnableBilateralFilter = bilateral
++        config.EnableEdgeAwareFilter = edge_aware
++        self.ptr.setConfiguration(config)
++
++    def setColorAutoExposure(self, float compensation=0):
++        if not -2 <= compensation <= 2:
++            raise ValueError("Exposure compensation must be between -2 and 2")
++        self.ptr.setColorAutoExposure(compensation)
++
++    def setColorSemiAutoExposure(self, float milliseconds):
++        if not 0 < milliseconds <= 640:
++            raise ValueError("Semi-auto exposure must be between 0 and 640 ms")
++        self.ptr.setColorSemiAutoExposure(milliseconds)
++
++    def setColorManualExposure(self, float milliseconds, float gain):
++        if not 0 < milliseconds <= 66 or not 1 <= gain <= 4:
++            raise ValueError("Manual exposure requires 0 < ms <= 66 and 1 <= gain <= 4")
++        self.ptr.setColorManualExposure(milliseconds, gain)
++
++    def setLedStatus(self, int led_id, int level, int stop_level=0,
++                     int interval_ms=0):
++        if led_id not in (0, 1) or not 0 <= level <= 1000 or not 0 <= stop_level <= 1000:
++            raise ValueError("LED id must be 0 or 1 and levels must be 0..1000")
++        if interval_ms < 0:
++            raise ValueError("Blink interval cannot be negative")
++        cdef libfreenect2.LedSettings led
++        led.LedId = led_id
++        led.Mode = 1 if interval_ms else 0
++        led.StartLevel = level
++        led.StopLevel = stop_level
++        led.IntervalInMs = interval_ms
++        led.Reserved = 0
++        self.ptr.setLedStatus(led)
++
+     def setColorFrameListener(self, FrameListener listener):
+         """Same as
+         ``libfreenect2::Freenect2Device::setColorFrameListener(FrameListener*)``
+@@ -1552,6 +1593,9 @@ cdef class Freenect2:
+             dev_ptr = self.ptr.openDevice(idx)
+         else:
+             dev_ptr = self.ptr.openDevice(idx, pipeline.pipeline_ptr_alias)
++        if dev_ptr == NULL:
++            raise RuntimeError("Unable to open Kinect device")
++        if pipeline is not None:
+             pipeline.owned_by_device = True
+ 
+         cdef Freenect2Device device = Freenect2Device()
+@@ -1564,6 +1608,9 @@ cdef class Freenect2:
+             dev_ptr = self.ptr.openDevice(serial)
+         else:
+             dev_ptr = self.ptr.openDevice(serial, pipeline.pipeline_ptr_alias)
++        if dev_ptr == NULL:
++            raise RuntimeError("Unable to open Kinect device")
++        if pipeline is not None:
+             pipeline.owned_by_device = True
+ 
+         cdef Freenect2Device device = Freenect2Device()
+@@ -1613,6 +1660,9 @@ cdef class Freenect2:
+             dev_ptr = self.ptr.openDefaultDevice()
+         else:
+             dev_ptr = self.ptr.openDefaultDevice(pipeline.pipeline_ptr_alias)
++        if dev_ptr == NULL:
++            raise RuntimeError("Unable to open Kinect device")
++        if pipeline is not None:
+             pipeline.owned_by_device = True
+ 
+         cdef Freenect2Device device = Freenect2Device()
+diff --git a/pylibfreenect2/libfreenect2/libfreenect2.pxd b/pylibfreenect2/libfreenect2/libfreenect2.pxd
+index 46cffec..56124a4 100644
+--- a/pylibfreenect2/libfreenect2/libfreenect2.pxd
++++ b/pylibfreenect2/libfreenect2/libfreenect2.pxd
+@@ -4,7 +4,7 @@
+ libfreenect2 cdef externs
+ """
+ 
+-from libc.stdint cimport uint32_t
++from libc.stdint cimport uint16_t, uint32_t
+ from libcpp cimport bool
+ from libcpp.string cimport string
+ from libcpp.map cimport map
+@@ -42,6 +42,11 @@ cdef extern from "libfreenect2/frame_listener_impl.h" namespace "libfreenect2":
+         bool waitForNewFrame(map[LibFreenect2FrameType, Frame*]&, int milliseconds) nogil
+         void release(map[LibFreenect2FrameType, Frame*]&)
+ 
++cdef extern from "libfreenect2/led_settings.h" namespace "libfreenect2":
++    cdef cppclass LedSettings:
++        uint16_t LedId, Mode, StartLevel, StopLevel
++        uint32_t IntervalInMs, Reserved
++
+ cdef extern from "libfreenect2/libfreenect2.hpp" namespace "libfreenect2":
+     cdef cppclass Freenect2Device:
+         unsigned int VendorId
+@@ -81,8 +86,18 @@ cdef extern from "libfreenect2/libfreenect2.hpp" namespace "libfreenect2":
+         cppclass IrCameraParams:
+             float fx, fy, cx, cy, k1, k2, k3, p1, p2
+ 
++        cppclass Config:
++            float MinDepth, MaxDepth
++            bool EnableBilateralFilter, EnableEdgeAwareFilter
++            Config() except +
++
+         ColorCameraParams getColorCameraParams()
+         IrCameraParams getIrCameraParams()
++        void setConfiguration(const Config &)
++        void setColorAutoExposure(float)
++        void setColorSemiAutoExposure(float)
++        void setColorManualExposure(float, float)
++        void setLedStatus(LedSettings)
+ 
+         # void setColorCameraParams(ColorCameraParams &)
+         # void setIrCameraParams(const Freenect2Device::IrCameraParams &)
