@@ -337,6 +337,8 @@ Desde la raíz de este repositorio, ejecute este comando en una terminal con ses
 
 ```bash
 LD_LIBRARY_PATH="$PWD/libfreenect2/install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" micromamba run -n kinectv2-dev python app/main.py
+
+env LD_LIBRARY_PATH="$PWD/libfreenect2/install/lib" micromamba run -n kinectv2-dev python app/main.py
 ```
 
 1. Seleccione la pipeline de procesamiento (`CpuPacketPipeline` por defecto; las demás aparecen solo si la compilación de `libfreenect2` las habilitó).

@@ -84,6 +84,44 @@ class HandAnalyzerTests(unittest.TestCase):
             window.gesture_worker = None
             window.close()
 
+    def test_sign_workspace_starts_with_hand_analysis_without_advanced_setup(self):
+        app = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        try:
+            self.assertEqual(window.workspace.tabText(window.workspace.currentIndex()), "Recognize signs")
+            window.gesture_mode.setCurrentText("Off")
+            window.rgb_stream.setChecked(False)
+            window.start_capture = Mock()
+            window.start_recognition()
+            self.assertEqual(window.gesture_mode.currentText(), "Landmarks")
+            self.assertTrue(window.rgb_stream.isChecked())
+            window.start_capture.assert_called_once_with()
+            self.assertFalse(window.enable_actions.isChecked())
+        finally:
+            window.close()
+
+    def test_live_letter_shows_match_not_training_selection_and_clears(self):
+        app = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        try:
+            window.templates = Mock()
+            window.templates.recognize.return_value = "T"
+            self.assertEqual(window.letter.currentText(), "N")
+            window.process_commands([{}])
+            self.assertEqual(window.recognized_letter.text(), "T")
+            self.assertFalse(window.enable_actions.isChecked())
+            window.process_commands([])
+            self.assertEqual(window.recognized_letter.text(), "—")
+            window.process_commands([{}])
+            window.gesture_received_at = 0
+            window.expire_recognized_letter()
+            self.assertEqual(window.recognized_letter.text(), "—")
+            window.process_commands([{}])
+            window.reset_commands()
+            self.assertEqual(window.recognized_letter.text(), "—")
+        finally:
+            window.close()
+
     def test_recognized_hand_includes_scores_landmarks_and_registered_depth(self):
         analyzer = object.__new__(HandAnalyzer)
         analyzer.mode = "Gestures"
@@ -107,6 +145,36 @@ class HandAnalyzerTests(unittest.TestCase):
                          ("Victory", "Right", 1.5))
         self.assertEqual(len(hand["landmarks"]), 21)
         self.assertEqual(len(hand["world_landmarks"]), 21)
+        self.assertEqual(hand["image_size"], (640, 360))
+
+    def test_alphabet_dispatch_personal_priority_and_depth_rejection(self):
+        app = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        try:
+            personal = Mock()
+            personal.data = {}
+            personal.recognize.return_value = None
+            window.templates = personal
+            lsp, asl = Mock(), Mock()
+            lsp.recognize.return_value = {"letter": "N"}
+            asl.recognize.return_value = {"letter": "T"}
+            window.base_models = {"LSP": lsp, "ASL": asl}
+            window.process_commands([{}])
+            self.assertEqual(window.recognized_letter.text(), "N")
+            window.alphabet.setCurrentText("ASL")
+            window.process_commands([{}])
+            self.assertEqual(window.recognized_letter.text(), "T")
+            personal.recognize.assert_called_with("ASL — personal samples", {})
+            personal.recognize.return_value = "A"
+            window.process_commands([{}])
+            self.assertEqual(window.recognized_letter.text(), "A")
+            window.require_distance.setChecked(True)
+            window.process_commands([{}])
+            self.assertEqual(window.recognized_letter.text(), "—")
+            window.process_commands([{}, {}])
+            self.assertEqual(window.recognized_letter.text(), "—")
+        finally:
+            window.close()
 
 
 if __name__ == "__main__":

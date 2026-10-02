@@ -1,0 +1,165 @@
+{
+  "purpose": "integration smoke test on source images, not independent accuracy",
+  "outcomes": [
+    {
+      "image": "a/a (1).jpg",
+      "expected": "A",
+      "prediction": {
+        "letter": "A",
+        "distance": 0.017551006749272346,
+        "margin": 0.11131338588893414
+      },
+      "milliseconds": 20.628093000141234
+    },
+    {
+      "image": "a/a (30).jpg",
+      "expected": "A",
+      "prediction": {
+        "letter": "A",
+        "distance": 0.054222721606492996,
+        "margin": 0.03621864691376686
+      },
+      "milliseconds": 18.50806599986754
+    },
+    {
+      "image": "a/a (60).jpg",
+      "expected": "A",
+      "prediction": {
+        "letter": "A",
+        "distance": 0.02733069472014904,
+        "margin": 0.07772167958319187
+      },
+      "milliseconds": 18.31713999990825
+    },
+    {
+      "image": "a/a (90).jpg",
+      "expected": "A",
+      "prediction": {
+        "letter": "A",
+        "distance": 0.014799606055021286,
+        "margin": 0.1056060679256916
+      },
+      "milliseconds": 18.078348000017286
+    },
+    {
+      "image": "a/a (120).jpg",
+      "expected": "A",
+      "prediction": {
+        "letter": "A",
+        "distance": 0.012117273174226284,
+        "margin": 0.12374649289995432
+      },
+      "milliseconds": 17.351339000015287
+    },
+    {
+      "image": "n/n (1).jpg",
+      "expected": "N",
+      "prediction": {
+        "letter": "N",
+        "distance": 0.011921554803848267,
+        "margin": 0.08091851323843002
+      },
+      "milliseconds": 18.108432000190078
+    },
+    {
+      "image": "n/n (30).jpg",
+      "expected": "N",
+      "prediction": {
+        "letter": "N",
+        "distance": 0.057438258081674576,
+        "margin": 0.04567599669098854
+      },
+      "milliseconds": 19.850244000281236
+    },
+    {
+      "image": "n/n (60).jpg",
+      "expected": "N",
+      "prediction": {
+        "letter": "N",
+        "distance": 0.06445854157209396,
+        "margin": 0.10743636637926102
+      },
+      "milliseconds": 17.8743240003314
+    },
+    {
+      "image": "n/n (90).jpg",
+      "expected": "N",
+      "prediction": {
+        "letter": "N",
+        "distance": 0.051116738468408585,
+        "margin": 0.059189874678850174
+      },
+      "milliseconds": 17.7650230002655
+    },
+    {
+      "image": "n/n (120).jpg",
+      "expected": "N",
+      "prediction": {
+        "letter": "M",
+        "distance": 0.04636351391673088,
+        "margin": 0.03526672348380089
+      },
+      "milliseconds": 18.092606000209344
+    },
+    {
+      "image": "t/t (1).jpg",
+      "expected": "T",
+      "prediction": {
+        "letter": "T",
+        "distance": 0.00743155786767602,
+        "margin": 0.06991753866896033
+      },
+      "milliseconds": 18.0589599999621
+    },
+    {
+      "image": "t/t (30).jpg",
+      "expected": "T",
+      "prediction": {
+        "letter": "T",
+        "distance": 0.007589744869619608,
+        "margin": 0.09817249840125442
+      },
+      "milliseconds": 20.100839999940945
+    },
+    {
+      "image": "t/t (60).jpg",
+      "expected": "T",
+      "prediction": {
+        "letter": "T",
+        "distance": 0.012895412743091583,
+        "margin": 0.06337243318557739
+      },
+      "milliseconds": 17.965492000257655
+    },
+    {
+      "image": "t/t (90).jpg",
+      "expected": "T",
+      "prediction": {
+        "letter": "T",
+        "distance": 0.017024921253323555,
+        "margin": 0.03600245527923107
+      },
+      "milliseconds": 18.79242399991199
+    },
+    {
+      "image": "t/t (120).jpg",
+      "expected": "T",
+      "prediction": {
+        "letter": "T",
+        "distance": 0.00886649638414383,
+        "margin": 0.04509888216853142
+      },
+      "milliseconds": 18.41677799984609
+    }
+  ],
+  "classification_timing": {
+    "LSP": {
+      "median_ms": 0.2311340001597273,
+      "p95_ms": 0.2504947997067575
+    },
+    "ASL": {
+      "median_ms": 0.4819450002742087,
+      "p95_ms": 0.49487460009913775
+    }
+  }
+}

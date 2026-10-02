@@ -46,10 +46,10 @@ class HandAnalyzer:
 
     def analyze(self, frame):
         color = frame["Color"]
+        if color.shape[1] > 640:
+            color = cv2.resize(color, (640, round(color.shape[0] * 640 / color.shape[1])),
+                              interpolation=cv2.INTER_AREA)
         rgb = cv2.cvtColor(color, cv2.COLOR_BGRA2RGB)
-        if rgb.shape[1] > 640:
-            rgb = cv2.resize(rgb, (640, round(rgb.shape[0] * 640 / rgb.shape[1])),
-                             interpolation=cv2.INTER_AREA)
         timestamp_ms = max(self.last_timestamp_ms + 1, int(frame["color_timestamp"]) // 8)
         self.last_timestamp_ms = timestamp_ms
         image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(rgb))
@@ -61,6 +61,7 @@ class HandAnalyzer:
         hands = []
         for index, landmarks in enumerate(result.hand_landmarks):
             hand = {
+                "image_size": (color.shape[1], color.shape[0]),
                 "landmarks": [(point.x, point.y, point.z) for point in landmarks],
                 "world_landmarks": [(point.x, point.y, point.z)
                                     for point in (result.hand_world_landmarks[index]
@@ -78,7 +79,9 @@ class HandAnalyzer:
                 wrist = landmarks[0]
                 column = min(max(int(wrist.x * 1920), 0), 1919)
                 row = min(max(int(wrist.y * 1080) + 1, 0), 1081)
-                distance_mm = float(frame["Big depth"][row, column])
+                patch = frame["Big depth"][max(0, row-2):row+3, max(0, column-2):column+3]
+                valid = patch[np.isfinite(patch) & (patch > 0)]
+                distance_mm = float(np.median(valid)) if valid.size else 0.0
                 if isfinite(distance_mm) and distance_mm > 0:
                     hand["wrist_depth_m"] = distance_mm / 1000
             hands.append(hand)

@@ -1,21 +1,24 @@
 """PyQt6 explorer for the streams exposed by libfreenect2."""
 
 import sys
+import shutil
 from datetime import datetime
 from pathlib import Path
 from time import monotonic
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
+from PyQt6.QtCore import Qt, pyqtSignal, QProcess, QUrl, QStandardPaths, QTimer
+from PyQt6.QtGui import QColor, QImage, QPainter, QPen, QPixmap, QDesktopServices
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout,
     QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton,
-    QScrollArea, QSpinBox, QTabWidget, QTextEdit, QVBoxLayout,
+    QScrollArea, QSpinBox, QTabWidget, QTextEdit, QVBoxLayout, QBoxLayout, QLayout,
     QWidget,
 )
 
 from capture import CaptureThread, available_pipelines, display_image
 from gestures import GestureThread
+from sign_commands import Templates, ActivationGate, ActionRegistry
+from alphabet_model import AlphabetModel
 
 
 HAND_EDGES = ((0, 1), (1, 2), (2, 3), (3, 4),
@@ -79,6 +82,23 @@ class MainWindow(QMainWindow):
         self.gesture_worker = None
         self.gesture_overlay = None
         self.gesture_received_at = 0.0
+        self.command_gate = ActivationGate()
+        self.actions = ActionRegistry({"browser": self.open_browser, "terminal": self.open_terminal})
+        self.template_error = ""
+        self.base_models = {}
+        self.model_errors = {}
+        for language in ("LSP", "ASL"):
+            try:
+                self.base_models[language] = AlphabetModel(language)
+            except (OSError, ValueError, KeyError) as error:
+                self.model_errors[language] = str(error)
+        template_path = Path(QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.AppDataLocation)) / "sign-templates.json"
+        try:
+            self.templates = Templates(template_path)
+        except (ValueError, OSError) as error:
+            self.templates = None
+            self.template_error = str(error)
         self.latest = None
         self.info = None
         self.capability_status = "No capture verified in this session"
@@ -104,6 +124,7 @@ class MainWindow(QMainWindow):
         self.preview_fps.setSuffix(" preview FPS")
         self.gesture_mode = QComboBox()
         self.gesture_mode.addItems(("Off", "Gestures", "Landmarks"))
+        self.gesture_mode.setCurrentText("Landmarks")
         self.hand_count = QSpinBox()
         self.hand_count.setRange(1, 4)
         self.hand_count.setValue(2)
@@ -231,6 +252,97 @@ class MainWindow(QMainWindow):
         self.capabilities = QTextEdit()
         self.capabilities.setReadOnly(True)
         self.tabs.addTab(self.capabilities, "Capabilities")
+        commands = QWidget()
+        command_layout = QVBoxLayout(commands)
+        command_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        description = QLabel("Choose LSP or ASL and start recognition. Base models recognize static letters; "
+                             "personal samples are optional. Check the live result before enabling actions.")
+        description.setWordWrap(True)
+        command_layout.addWidget(description)
+        self.alphabet = QComboBox()
+        for language in ("LSP", "ASL", "LSE"):
+            self.alphabet.addItem(language, f"{language} — personal samples")
+        self.letter = QComboBox()
+        self.letter.addItems(list("ABCDEFGHIJKLMNÑOPQRSTUVWXYZ"))
+        self.letter.setCurrentText("N")
+        self.action_choice = QComboBox()
+        self.action_choice.addItems(("none", "browser", "terminal"))
+        self.action_choice.setCurrentText("browser")
+        self.letter.currentTextChanged.connect(lambda letter: self.action_choice.setCurrentText(
+            self.actions.bindings.get(letter, "none")))
+        self.action_choice.currentTextChanged.connect(self.assign_action)
+        self.record_sample = QPushButton("Record current pose")
+        self.record_sample.clicked.connect(self.record_pose)
+        self.enable_actions = QCheckBox("Enable actions (off by default)")
+        self.enable_actions.toggled.connect(lambda _: self.reset_commands())
+        self.alphabet.currentTextChanged.connect(lambda _: self.reset_commands())
+        self.require_distance = QCheckBox("Require wrist distance 0.5–2.5 m")
+        self.require_distance.toggled.connect(lambda _: self.reset_commands())
+        self.command_status = QLabel(self.template_error or "No command recognized")
+        self.recognized_letter = QLabel("—")
+        self.recognized_letter.setAccessibleName("Recognized letter")
+        self.recognized_letter.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        letter_font = self.recognized_letter.font()
+        letter_font.setPointSize(36)
+        letter_font.setBold(True)
+        self.recognized_letter.setFont(letter_font)
+        letter_caption = QLabel("Recognized letter · live result")
+        letter_caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        command_layout.addWidget(letter_caption)
+        command_layout.addWidget(self.recognized_letter)
+        self.letter_expiry = QTimer(self)
+        self.letter_expiry.setInterval(250)
+        self.letter_expiry.timeout.connect(self.expire_recognized_letter)
+        self.letter_expiry.start()
+        self.sign_preview = ImageView()
+        self.sign_preview.setText("1. Select Start recognition above\n2. Show one hand to the camera")
+        self.sign_preview.setMinimumSize(240, 180)
+        preview_scroll = QScrollArea()
+        preview_scroll.setWidgetResizable(True)
+        preview_scroll.setWidget(self.sign_preview)
+        preview_scroll.setMinimumHeight(220)
+        command_layout.addWidget(preview_scroll, 1)
+        self.steps_layout = QBoxLayout(QBoxLayout.Direction.LeftToRight)
+        self.steps_layout.setSpacing(16)
+        command_layout.addLayout(self.steps_layout)
+        groups = []
+        for title in ("1. Choose an alphabet", "2. Personalize (optional)", "3. Try the action"):
+            group = QGroupBox(title)
+            box = QVBoxLayout(group)
+            box.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+            box.setSpacing(8)
+            self.steps_layout.addWidget(group, 1)
+            groups.append(box)
+        for label, widget, box in (("Alphabet profile", self.alphabet, groups[0]),
+                                   ("Letter", self.letter, groups[0]),
+                                   ("Action for this session", self.action_choice, groups[2])):
+            caption = QLabel(label)
+            caption.setBuddy(widget)
+            widget.setAccessibleName(label)
+            box.addWidget(caption)
+            box.addWidget(widget)
+        self.sample_status = QLabel()
+        self.sample_status.setWordWrap(True)
+        groups[1].addWidget(self.sample_status)
+        groups[1].addWidget(self.record_sample)
+        tip = QLabel("To personalize a letter, record at least 3 samples with the same hand.")
+        tip.setWordWrap(True)
+        groups[1].addWidget(tip)
+        groups[2].addWidget(self.enable_actions)
+        tip = QLabel("Hold for 0.8 s. Release your pose before the next action.")
+        tip.setWordWrap(True)
+        groups[2].addWidget(tip)
+        for box in groups:
+            box.addStretch()
+        self.model_status = QLabel()
+        self.model_status.setWordWrap(True)
+        command_layout.addWidget(self.model_status)
+        self.command_status.setWordWrap(True)
+        self.command_status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        command_layout.addWidget(self.command_status)
+        self.letter.currentTextChanged.connect(self.update_sample_status)
+        self.alphabet.currentTextChanged.connect(self.update_sample_status)
+        self.update_sample_status()
         self.update_capabilities()
 
         self.details = QTextEdit()
@@ -243,22 +355,86 @@ class MainWindow(QMainWindow):
             "Audio and skeletal tracking are not provided by libfreenect2. "
             "Hand gestures are available separately through MediaPipe."
         )
+        advanced = QWidget()
+        advanced_layout = QVBoxLayout(advanced)
+        advanced_layout.addLayout(controls)
+        advanced_layout.addLayout(stream_controls)
+        advanced_layout.addLayout(gesture_controls)
+        advanced_layout.addWidget(self.settings_panel)
+        advanced_layout.addLayout(setting_controls)
+        advanced_layout.addWidget(self.require_distance)
+        advanced_layout.addWidget(QLabel("Distance filtering requires both streams and Extended registration."))
+        advanced_layout.addWidget(self.tabs)
+        advanced_layout.addWidget(self.details)
+        advanced_scroll = QScrollArea()
+        advanced_scroll.setWidgetResizable(True)
+        advanced_scroll.setWidget(advanced)
+        self.workspace = QTabWidget()
+        sign_scroll = QScrollArea()
+        sign_scroll.setWidgetResizable(True)
+        sign_scroll.setWidget(commands)
+        self.workspace.addTab(sign_scroll, "Recognize signs")
+        self.workspace.addTab(advanced_scroll, "Advanced sensor tools")
         layout = QVBoxLayout()
-        layout.addLayout(controls)
-        layout.addLayout(stream_controls)
-        layout.addLayout(gesture_controls)
-        layout.addWidget(self.settings_panel)
-        layout.addLayout(setting_controls)
-        layout.addWidget(self.tabs)
-        layout.addWidget(self.details)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(16)
+        title = QLabel("Recognize signs and run actions")
+        font = title.font()
+        font.setPointSizeF(font.pointSizeF() * 1.4)
+        font.setBold(True)
+        title.setFont(font)
+        title.setWordWrap(True)
+        layout.addWidget(title)
+        toolbar = QHBoxLayout()
+        controls.removeWidget(self.start_button)
+        controls.removeWidget(self.stop_button)
+        self.start_button.setText("Start recognition")
+        self.stop_button.setText("Stop")
+        self.start_button.setMinimumHeight(40)
+        self.stop_button.setMinimumHeight(40)
+        toolbar.addWidget(self.start_button)
+        toolbar.addWidget(self.stop_button)
+        toolbar.addStretch()
+        layout.addLayout(toolbar)
+        layout.addWidget(self.workspace)
         central = QWidget()
         central.setLayout(layout)
         self.setCentralWidget(central)
         self.statusBar().showMessage("Disconnected")
 
-        self.start_button.clicked.connect(self.start_capture)
+        self.start_button.clicked.connect(self.start_recognition)
         self.stop_button.clicked.connect(self.stop_capture)
         self.snapshot_button.clicked.connect(self.save_snapshot)
+
+    def resizeEvent(self, event):
+        if hasattr(self, "steps_layout"):
+            self.steps_layout.setDirection(QBoxLayout.Direction.TopToBottom if self.width() < 760
+                                           else QBoxLayout.Direction.LeftToRight)
+        super().resizeEvent(event)
+
+    def update_sample_status(self):
+        samples = (self.templates.data.get(self.alphabet.currentData(), {}).get(self.letter.currentText(), [])
+                   if self.templates is not None else [])
+        left = sum(sample["side"] == "Left" for sample in samples)
+        right = sum(sample["side"] == "Right" for sample in samples)
+        self.sample_status.setText(f"{self.letter.currentText()}: {left} left-hand / {right} right-hand samples\n"
+                                   "Personal matching needs 3 for the same hand.")
+        language = self.alphabet.currentText()
+        model = self.base_models.get(language)
+        if model is not None:
+            self.model_status.setText(f"{language} experimental base model ready · 24 static letters · "
+                                     "J, Z and Ñ are not supported by the base model. "
+                                     "No samples needed to start. Personal samples take priority. "
+                                     "Closed-fist letters such as M/N/T may need personalization.")
+        else:
+            detail = self.model_errors.get(language, "No base model bundled for this alphabet")
+            self.model_status.setText(f"{language}: personal samples only. {detail}")
+
+    def start_recognition(self):
+        if self.workspace.currentIndex() == 0 and self.worker is None and self.gesture_worker is None:
+            self.rgb_stream.setChecked(True)
+            self.gesture_mode.setCurrentText("Landmarks")
+        self.start_capture()
 
     def refresh_devices(self):
         from pylibfreenect2 import Freenect2
@@ -392,6 +568,7 @@ class MainWindow(QMainWindow):
         self.worker.start()
 
     def stop_capture(self):
+        self.reset_commands()
         if self.gesture_worker is not None:
             self.gesture_worker.stop()
         if self.worker is not None:
@@ -401,6 +578,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Stopping capture...")
 
     def on_finished(self):
+        self.reset_commands()
         if self.gesture_worker is not None:
             self.gesture_worker.stop()
         self.worker = None
@@ -427,6 +605,7 @@ class MainWindow(QMainWindow):
             self.start_button.setEnabled(True)
 
     def on_gesture_error(self, message):
+        self.reset_commands()
         self.gesture_status.setText(f"Hand analysis error: {message}")
         if self.gesture_worker is not None:
             self.gesture_worker.stop()
@@ -436,6 +615,7 @@ class MainWindow(QMainWindow):
             return
         self.gesture_overlay = result["hands"]
         self.gesture_received_at = monotonic()
+        self.process_commands(result["hands"])
         if result["hands"]:
             labels = []
             for hand in result["hands"]:
@@ -448,6 +628,76 @@ class MainWindow(QMainWindow):
             self.gesture_status.setText(summary)
         else:
             self.gesture_status.setText("No hands detected")
+
+    def reset_commands(self):
+        self.command_gate = ActivationGate()
+        self.gesture_overlay = None
+        if hasattr(self, "recognized_letter"):
+            self.recognized_letter.setText("—")
+
+    def expire_recognized_letter(self):
+        if monotonic() - self.gesture_received_at > 0.5:
+            self.recognized_letter.setText("—")
+
+    def assign_action(self, action):
+        if action == "none":
+            self.actions.bindings.pop(self.letter.currentText(), None)
+        else:
+            self.actions.bindings[self.letter.currentText()] = action
+        self.reset_commands()
+
+    def record_pose(self):
+        if (self.templates is None or not self.gesture_overlay or
+                len(self.gesture_overlay) != 1 or monotonic() - self.gesture_received_at > 0.5):
+            self.command_status.setText("Show exactly one hand during capture first")
+            return
+        hand = self.gesture_overlay[0]
+        self.enable_actions.setChecked(False)
+        try:
+            self.templates.add(self.alphabet.currentData(), self.letter.currentText(),
+                               hand)
+            self.command_status.setText(f"Sample saved for {self.letter.currentText()}")
+            self.update_sample_status()
+        except (ValueError, OSError) as error:
+            self.command_status.setText(str(error))
+
+    def process_commands(self, hands):
+        letter = None
+        source = "No match"
+        self.recognized_letter.setText("—")
+        try:
+            if len(hands) == 1:
+                hand = hands[0]
+                if (not self.require_distance.isChecked() or
+                        0.5 <= hand.get("wrist_depth_m", -1) <= 2.5):
+                    if self.templates is not None:
+                        letter = self.templates.recognize(self.alphabet.currentData(), hand)
+                    if letter:
+                        source = "Personal sample"
+                    else:
+                        model = self.base_models.get(self.alphabet.currentText())
+                        if model is not None:
+                            prediction = model.recognize(hand)
+                            letter = prediction["letter"]
+                            source = f"{self.alphabet.currentText()} base model"
+            fired = self.command_gate.update(letter, monotonic())
+            self.recognized_letter.setText(letter or "—")
+            self.command_status.setText(f"{source}: {letter or 'unknown — show one clear hand pose'}")
+            if fired and self.enable_actions.isChecked():
+                self.command_status.setText(self.actions.execute(fired))
+        except (ValueError, OSError, KeyError, TypeError) as error:
+            self.command_status.setText(f"Command error: {error}")
+
+    def open_browser(self):
+        if not QDesktopServices.openUrl(QUrl("https://www.google.com")):
+            raise OSError("Could not open the browser")
+
+    def open_terminal(self):
+        executable = next((shutil.which(name) for name in
+                           ("x-terminal-emulator", "konsole", "gnome-terminal", "kitty", "alacritty", "xterm")
+                           if shutil.which(name)), None)
+        if executable is None or not QProcess.startDetached(executable, [])[0]:
+            raise OSError("Could not launch an installed terminal")
 
     def on_device_ready(self, info):
         self.info = info
@@ -470,7 +720,10 @@ class MainWindow(QMainWindow):
             self.capability_probe_complete = True
             self.update_capabilities()
         active = self.tabs.tabText(self.tabs.currentIndex())
-        if active in self.views and active in frames:
+        if self.workspace.currentIndex() == 0 and "Color" in frames:
+            overlay = self.gesture_overlay if monotonic() - self.gesture_received_at < 0.5 else ()
+            self.sign_preview.show_array(display_image("Color", frames["Color"]), overlay)
+        elif active in self.views and active in frames:
             overlay = (self.gesture_overlay if active == "Color" and
                        monotonic() - self.gesture_received_at < 0.5 else ())
             self.views[active].show_array(display_image(active, frames[active]), overlay)

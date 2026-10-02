@@ -1,6 +1,8 @@
 __pycache__/
 *.py[cod]
 *.npz
+!app/models/asl.npz
+!app/models/lsp.npz
 
 # Local source checkouts and native build output.
 libfreenect2/

@@ -1,0 +1,110 @@
+{
+  "attempted": 36401,
+  "detected_unique": 33536,
+  "training": 7200,
+  "held_out": 6697,
+  "accepted": 5362,
+  "correct": 5204,
+  "coverage": 0.800657010601762,
+  "accuracy_including_rejections": 0.7770643571748544,
+  "accepted_accuracy": 0.9705333830660201,
+  "split": "seed 42, per-letter 20% random holdout; not signer-independent",
+  "per_letter": {
+    "A": {
+      "tested": 827,
+      "correct": 585
+    },
+    "B": {
+      "tested": 256,
+      "correct": 237
+    },
+    "C": {
+      "tested": 115,
+      "correct": 108
+    },
+    "D": {
+      "tested": 108,
+      "correct": 99
+    },
+    "E": {
+      "tested": 424,
+      "correct": 356
+    },
+    "F": {
+      "tested": 204,
+      "correct": 183
+    },
+    "G": {
+      "tested": 513,
+      "correct": 430
+    },
+    "H": {
+      "tested": 258,
+      "correct": 229
+    },
+    "I": {
+      "tested": 204,
+      "correct": 187
+    },
+    "K": {
+      "tested": 388,
+      "correct": 250
+    },
+    "L": {
+      "tested": 283,
+      "correct": 215
+    },
+    "M": {
+      "tested": 249,
+      "correct": 186
+    },
+    "N": {
+      "tested": 291,
+      "correct": 226
+    },
+    "O": {
+      "tested": 95,
+      "correct": 90
+    },
+    "P": {
+      "tested": 115,
+      "correct": 110
+    },
+    "Q": {
+      "tested": 138,
+      "correct": 134
+    },
+    "R": {
+      "tested": 257,
+      "correct": 97
+    },
+    "S": {
+      "tested": 328,
+      "correct": 255
+    },
+    "T": {
+      "tested": 250,
+      "correct": 200
+    },
+    "U": {
+      "tested": 236,
+      "correct": 111
+    },
+    "V": {
+      "tested": 245,
+      "correct": 153
+    },
+    "W": {
+      "tested": 260,
+      "correct": 229
+    },
+    "X": {
+      "tested": 218,
+      "correct": 199
+    },
+    "Y": {
+      "tested": 435,
+      "correct": 335
+    }
+  }
+}
